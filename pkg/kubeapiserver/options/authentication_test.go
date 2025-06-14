@@ -34,6 +34,7 @@ import (
 	"github.com/spf13/pflag"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
@@ -50,7 +51,6 @@ import (
 	openapicommon "k8s.io/kube-openapi/pkg/common"
 	kubeauthenticator "k8s.io/kubernetes/pkg/kubeapiserver/authenticator"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-
 	"k8s.io/utils/pointer"
 )
 
@@ -64,6 +64,7 @@ func TestAuthenticationValidate(t *testing.T) {
 		testAuthenticationConfigFile      string
 		expectErr                         string
 		enabledFeatures, disabledFeatures []featuregate.Feature
+		emulationVersion                  *version.Version
 	}{
 		{
 			name: "test when OIDC and ServiceAccounts are nil",
@@ -250,6 +251,9 @@ func TestAuthenticationValidate(t *testing.T) {
 				Allow:    true,
 				FlagsSet: true,
 			},
+			// This allows us to disable the AnonymousAuthConfigurableEndpoints
+			// feature-gate, otherwise this feature-gate cannot be disabled.
+			emulationVersion: version.MustParse("1.33"),
 		},
 	}
 
@@ -261,6 +265,12 @@ func TestAuthenticationValidate(t *testing.T) {
 			options.ServiceAccounts = testcase.testSA
 			options.WebHook = testcase.testWebHook
 			options.AuthenticationConfigFile = testcase.testAuthenticationConfigFile
+
+			// SetFeatureGateEmulationVersionDuringTest needs to be called
+			// before any calls to SetFeatureGateDuringTest to work reliably.
+			if testcase.emulationVersion != nil {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			for _, f := range testcase.enabledFeatures {
 				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, f, true)
 			}
@@ -507,7 +517,6 @@ func TestWithTokenGetterFunction(t *testing.T) {
 }
 
 func TestToAuthenticationConfig_Anonymous(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
 	testCases := []struct {
 		name                     string
 		args                     []string
@@ -546,7 +555,7 @@ func TestToAuthenticationConfig_Anonymous(t *testing.T) {
 			name: "file-anonymous-disabled-AnonymousAuthConfigurableEndpoints-disabled",
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -559,7 +568,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -572,7 +581,7 @@ anonymous:
 					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: false},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -585,7 +594,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -598,7 +607,7 @@ anonymous:
 					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: true},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -611,7 +620,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -626,7 +635,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   conditions:
@@ -640,7 +649,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -669,7 +678,7 @@ anonymous:
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -684,20 +693,20 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{"--anonymous-auth=True",
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
 `),
 			},
-			expectErr: "--anonynous-auth flag cannot be set when anonymous field is configured in authentication configuration file",
+			expectErr: "--anonymous-auth flag cannot be set when anonymous field is configured in authentication configuration file",
 		},
 		{
 			name:                     "flag-anonymous-enabled-file-anonymous-notset-AnonymousAuthConfigurableEndpoints-enabled",
 			enableAnonymousEndpoints: true,
 			args: []string{"--anonymous-auth=True",
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -729,7 +738,7 @@ jwt:
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -747,7 +756,11 @@ jwt:
 
 	for _, testcase := range testCases {
 		t.Run(testcase.name, func(t *testing.T) {
+			if !testcase.enableAnonymousEndpoints {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.AnonymousAuthConfigurableEndpoints, testcase.enableAnonymousEndpoints)
+
 			opts := NewBuiltInAuthenticationOptions().WithAnonymous()
 			pf := pflag.NewFlagSet("test-builtin-authentication-opts", pflag.ContinueOnError)
 			opts.AddFlags(pf)
@@ -782,8 +795,6 @@ jwt:
 }
 
 func TestToAuthenticationConfig_OIDC(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
-
 	testCases := []struct {
 		name         string
 		args         []string
@@ -982,7 +993,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 			name: "basic authentication configuration",
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -1013,7 +1024,7 @@ jwt:
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -1195,6 +1206,9 @@ func TestValidateOIDCOptions(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
+			if !tt.structuredAuthenticationConfigEnabled {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, tt.structuredAuthenticationConfigEnabled)
 
 			opts := NewBuiltInAuthenticationOptions().WithOIDC()
@@ -1460,6 +1474,82 @@ jwt:
 			expectedConfig: &apiserver.AuthenticationConfiguration{},
 			expectedContentData: `{
 							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration"}`,
+		},
+		{
+			name: "v1 - json",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+					},
+				},
+			},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`,
+		},
+		{
+			name: "v1 - yaml",
+			file: func() string {
+				return writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+						ClaimMappings: apiserver.ClaimMappings{
+							Username: apiserver.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: pointer.String(""),
+							},
+						},
+					},
+				},
+			},
+			expectedContentData: `
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
+		},
+		{
+			name: "v1 - no jwt",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration"}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
 							"kind":"AuthenticationConfiguration"}`,
 		},
 	}
